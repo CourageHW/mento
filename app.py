@@ -2,8 +2,8 @@ import streamlit as st
 import fitz  # PyMuPDF
 import re
 
-# --- [PDF 데이터 추출 함수 (웹 전용으로 약간 수정)] ---
-@st.cache_data # 웹에서 매번 로딩하지 않도록 캐싱 처리
+# --- [PDF 데이터 추출 함수 (해설 추출 로직 추가)] ---
+@st.cache_data
 def extract_quiz_from_pdf(pdf_bytes):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     full_text = ""
@@ -105,17 +105,26 @@ def extract_quiz_from_pdf(pdf_bytes):
 
         final_q_text = q_text + "\n" + formatted_code
 
+        # --- [추가된 로직: 정답 및 해설 텍스트 추출] ---
         correct_ans = 0
-        for ans_line in ans_lines[:15]:
-            ans_match = re.search(r'[①②③④]', ans_line)
-            if ans_match:
-                correct_ans = ans_map.get(ans_match.group(), 0)
-                break
+        exp_lines = []
+        for ans_line in ans_lines:
+            # 정답 번호 찾기 (처음 발견되는 번호 1번만)
+            if correct_ans == 0:
+                ans_match = re.search(r'[①②③④]', ans_line)
+                if ans_match:
+                    correct_ans = ans_map.get(ans_match.group(), 0)
+            
+            # 해설 텍스트 정제 (의미 없는 기호 제거)
+            clean_line = ans_line.replace('"', '').replace(',', '').replace('The following table:', '').strip()
+            if clean_line and clean_line not in ['정답', '모범답안', '해설']:
+                exp_lines.append(clean_line)
             
         all_questions.append({
             "q": final_q_text.strip(),
             "o": clean_options,
-            "a": correct_ans if correct_ans != 0 else 1 
+            "a": correct_ans if correct_ans != 0 else 1,
+            "exp": "\n".join(exp_lines) # 추출한 해설을 문제 데이터에 저장
         })
 
     return all_questions
@@ -123,6 +132,7 @@ def extract_quiz_from_pdf(pdf_bytes):
 # --- [상태 초기화 및 웹 UI] ---
 st.set_page_config(page_title="파이썬 마스터 200", page_icon="🚀", layout="centered")
 
+# 피드백 모드 상태 변수 추가
 if 'idx' not in st.session_state:
     st.session_state.idx = 0
     st.session_state.wrong_pool = []
@@ -130,6 +140,10 @@ if 'idx' not in st.session_state:
     st.session_state.all_questions = []
     st.session_state.round_ended = False
     st.session_state.mission_complete = False
+    # 새롭게 추가된 상태 변수들
+    st.session_state.show_feedback = False 
+    st.session_state.is_correct = False
+    st.session_state.user_choice = None
 
 st.title("🚀 파이썬 마스터 200")
 st.markdown("**오답 무한 반복 시스템** (멘티용 웹버전)")
@@ -138,7 +152,6 @@ st.markdown("**오답 무한 반복 시스템** (멘티용 웹버전)")
 if not st.session_state.all_questions:
     with st.spinner("🚀 문제를 불러오는 중입니다... 잠시만 기다려주세요!"):
         try:
-            # 깃허브에 올라간 PDF 파일명과 정확히 똑같아야 합니다.
             with open("파이썬_객관식_200문항.pdf", "rb") as f:
                 pdf_bytes = f.read()
             
@@ -185,26 +198,53 @@ else:
         if len(q_text_split) > 1:
             st.code(q_text_split[1], language="python")
 
-        # 폼을 사용하여 엔터키 지원 및 화면 깜빡임 방지
-        with st.form(key=f"quiz_form_{idx}"):
-            user_choice = st.radio("정답을 선택하세요:", current_q['o'], index=None)
-            submit_button = st.form_submit_button(label='확인 (제출)', use_container_width=True)
+        # --- [1. 문제 풀이 모드 (정답 제출 전)] ---
+        if not st.session_state.show_feedback:
+            with st.form(key=f"quiz_form_{idx}"):
+                user_choice = st.radio("정답을 선택하세요:", current_q['o'], index=None)
+                submit_button = st.form_submit_button(label='확인 (제출)', use_container_width=True)
+                
+                if submit_button:
+                    if user_choice is None:
+                        st.error("보기를 선택해주세요!")
+                    else:
+                        st.session_state.user_choice = user_choice
+                        selected_idx = current_q['o'].index(user_choice) + 1
+                        
+                        # 정답 체크
+                        st.session_state.is_correct = (selected_idx == current_q['a'])
+                        
+                        if not st.session_state.is_correct:
+                            st.session_state.wrong_pool.append(current_q)
+                        
+                        # 피드백 화면으로 전환
+                        st.session_state.show_feedback = True
+                        st.rerun()
+
+        # --- [2. 피드백 및 해설 모드 (정답 제출 후)] ---
+        else:
+            # 사용자가 골랐던 답을 고정(disabled)해서 보여줌
+            user_idx = current_q['o'].index(st.session_state.user_choice) if st.session_state.user_choice in current_q['o'] else 0
+            st.radio("내가 선택한 답:", current_q['o'], index=user_idx, disabled=True)
             
-            if submit_button:
-                if user_choice is None:
-                    st.error("보기를 선택해주세요!")
-                else:
-                    selected_idx = current_q['o'].index(user_choice) + 1
-                    
-                    if selected_idx != current_q['a']:
-                        st.session_state.wrong_pool.append(current_q)
-                    
-                    st.session_state.idx += 1
-                    
-                    if st.session_state.idx >= len(st.session_state.current_pool):
-                        if len(st.session_state.wrong_pool) > 0:
-                            st.session_state.round_ended = True
-                        else:
-                            st.session_state.mission_complete = True
-                    
-                    st.rerun()
+            # 정답 여부에 따른 알림
+            if st.session_state.is_correct:
+                st.success("🎉 정답입니다!")
+            else:
+                st.error(f"❌ 오답입니다. (정답은 {current_q['a']}번입니다)")
+            
+            # PDF에서 추출한 해설 보여주기
+            st.info(f"💡 **해설 및 모범답안**\n\n{current_q.get('exp', '해설이 없습니다.')}")
+            
+            # 다음 문제로 넘어가기 버튼
+            if st.button("다음 문제로 진행하기", use_container_width=True, type="primary"):
+                st.session_state.show_feedback = False
+                st.session_state.idx += 1
+                
+                # 풀(Pool)의 끝에 도달했을 때 라운드 종료 처리
+                if st.session_state.idx >= len(st.session_state.current_pool):
+                    if len(st.session_state.wrong_pool) > 0:
+                        st.session_state.round_ended = True
+                    else:
+                        st.session_state.mission_complete = True
+                st.rerun()

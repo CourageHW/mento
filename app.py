@@ -134,19 +134,25 @@ if 'idx' not in st.session_state:
 st.title("🚀 파이썬 마스터 200")
 st.markdown("**오답 무한 반복 시스템** (멘티용 웹버전)")
 
-# PDF 업로드 (멘티가 직접 올리거나 멘토가 올려둘 수 있음)
+# PDF 자동 로드 (깃허브에 올라간 파일 사용)
 if not st.session_state.all_questions:
-    uploaded_file = st.file_uploader("파이썬 200문항 PDF 파일을 업로드하세요", type="pdf")
-    if uploaded_file is not None:
-        with st.spinner("문제를 분석 중입니다..."):
-            pdf_bytes = uploaded_file.read()
+    with st.spinner("🚀 문제를 불러오는 중입니다... 잠시만 기다려주세요!"):
+        try:
+            # 깃허브에 올라간 PDF 파일명과 정확히 똑같아야 합니다.
+            with open("파이썬_객관식_200문항.pdf", "rb") as f:
+                pdf_bytes = f.read()
+            
             questions = extract_quiz_from_pdf(pdf_bytes)
+            
             if questions:
                 st.session_state.all_questions = questions
                 st.session_state.current_pool = questions[:]
                 st.rerun()
             else:
-                st.error("문제를 불러오지 못했습니다.")
+                st.error("문제를 불러오지 못했습니다. PDF 파일 형식을 확인해주세요.")
+        except FileNotFoundError:
+            st.error("⚠️ '파이썬_객관식_200문항.pdf' 파일을 찾을 수 없습니다. 깃허브 저장소에 파일이 잘 올라가 있는지 확인해주세요!")
+
 else:
     # 모든 문제 정복 시
     if st.session_state.mission_complete:
